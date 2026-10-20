@@ -1,30 +1,29 @@
-name: Deploy to Amazon ECS
+name: Deploy Next.js to AWS ECS
 
 on:
   push:
     branches:
-      - main # Triggers the workflow on push to the main branch
+      - main              # Triggers automatically on code pushes to main
+  workflow_dispatch:      # Allows manual trigger from the GitHub Actions UI tab
 
 env:
   AWS_REGION: us-east-1                   # Replace with your AWS Region
-  ECR_REPOSITORY: my-sample-app           # Replace with your Amazon ECR repository name
-  ECS_SERVICE: my-ecs-service             # Replace with your Amazon ECS service name
-  ECS_CLUSTER: my-ecs-cluster             # Replace with your Amazon ECS cluster name
-  ECS_TASK_DEFINITION: task-definition.json # Path to your ECS task definition JSON file
-  CONTAINER_NAME: my-container-name       # Name of the container in the task definition
+  ECR_REPOSITORY: nextjs-sample-app       # Replace with your ECR Repository Name
+  ECS_CLUSTER: nextjs-cluster             # Replace with your ECS Cluster Name
+  ECS_SERVICE: nextjs-service             # Replace with your ECS Service Name
+  CONTAINER_NAME: nextjs-container         # Must match the container name in task-definition.json
 
 jobs:
   deploy:
-    name: Build and Deploy
+    name: Build, Push, and Deploy
     runs-on: ubuntu-latest
-    environment: production
 
     steps:
       # Step 1: Check out the repository code
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # Step 2: Configure AWS Credentials using Secrets
+      # Step 2: Authenticate with AWS using repository secrets
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -32,38 +31,41 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # Step 3: Log in to Amazon ECR
+      # Step 3: Log in to the Amazon ECR registry
       - name: Log in to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # Step 4: Build, Tag, and Push Docker Image to ECR
+      # Step 4: Build the Docker image, tag it with Git commit SHA, and push to ECR
       - name: Build, Tag, and Push Image to ECR
         id: build-image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          # Build a docker container and push it to ECR
+          # Build the docker container using the root Dockerfile
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          
+          # Push the newly built image to AWS ECR
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          # Emit the image URI as an output variable for the next step
+          
+          # Pass the dynamic image URI down to the next steps
           echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
-      # Step 5: Update the Image URI in the ECS Task Definition
-      - name: Render New Task Definition
-        id: render-task-def
+      # Step 5: Inject the new ECR image URI into the task definition file
+      - name: Fill in the new image ID in the Amazon ECS task definition
+        id: task-def
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
-          task-definition: ${{ env.ECS_TASK_DEFINITION }}
+          task-definition: task-definition.json
           container-name: ${{ env.CONTAINER_NAME }}
           image: ${{ steps.build-image.outputs.image }}
 
-      # Step 6: Deploy the Updated Task Definition to Amazon ECS
-      - name: Deploy to Amazon ECS
+      # Step 6: Deploy the updated task definition to Amazon ECS
+      - name: Deploy Amazon ECS task definition
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
-          task-definition: ${{ steps.render-task-def.outputs.task-definition }}
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
           service: ${{ env.ECS_SERVICE }}
           cluster: ${{ env.ECS_CLUSTER }}
           wait-for-service-stability: true
