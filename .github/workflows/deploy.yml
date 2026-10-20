@@ -1,10 +1,10 @@
-name: Deploy Next.js to AWS ECS
+name: Deploy Next.js to AWS ECS via Self-Hosted Runner
 
 on:
   push:
     branches:
-      - main              # Triggers automatically on code pushes to main
-  workflow_dispatch:      # Allows manual trigger from the GitHub Actions UI tab
+      - main
+  workflow_dispatch:
 
 env:
   AWS_REGION: us-east-1                   # Replace with your AWS Region
@@ -16,43 +16,31 @@ env:
 jobs:
   deploy:
     name: Build, Push, and Deploy
-    runs-on: ubuntu-latest
+    # Crucial: Tells GitHub to run this on your AWS EC2 instance, not GitHub servers
+    runs-on: self-hosted
 
     steps:
-      # Step 1: Check out the repository code
+      # Step 1: Check out the repository code onto the EC2 machine
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # Step 2: Authenticate with AWS using repository secrets
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      # Step 3: Log in to the Amazon ECR registry
+      # Step 2: Log in to ECR (Automatically uses the EC2 Instance IAM Profile)
       - name: Log in to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # Step 4: Build the Docker image, tag it with Git commit SHA, and push to ECR
+      # Step 3: Build the Docker image locally and push internally to ECR
       - name: Build, Tag, and Push Image to ECR
         id: build-image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          # Build the docker container using the root Dockerfile
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-          
-          # Push the newly built image to AWS ECR
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          
-          # Pass the dynamic image URI down to the next steps
           echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
-      # Step 5: Inject the new ECR image URI into the task definition file
+      # Step 4: Map out the new task definition layout
       - name: Fill in the new image ID in the Amazon ECS task definition
         id: task-def
         uses: aws-actions/amazon-ecs-render-task-definition@v1
@@ -61,7 +49,7 @@ jobs:
           container-name: ${{ env.CONTAINER_NAME }}
           image: ${{ steps.build-image.outputs.image }}
 
-      # Step 6: Deploy the updated task definition to Amazon ECS
+      # Step 5: Execute the rolling service deployment update on ECS
       - name: Deploy Amazon ECS task definition
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
